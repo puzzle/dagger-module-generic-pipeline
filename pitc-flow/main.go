@@ -16,6 +16,25 @@ import (
 
 type PitcFlow struct{}
 
+type Results struct {
+	// haml-lint output as json
+	LintOutput *dagger.File
+	// brakeman output as plain text
+	SecurityScan *dagger.File
+	// trivy results as json
+	VulnerabilityScan *dagger.File
+	// the SBOM
+	Sbom *dagger.File
+	// the built image
+	Image *dagger.Container
+	// the test reports
+	TestReports *dagger.Directory
+	// errors
+	Error string
+	// the outcome of the run
+	Success bool
+}
+
 // Returns a file containing the results of the lint command
 func (m *PitcFlow) Lint(
 	// Container to run the lint command
@@ -194,7 +213,7 @@ func (m *PitcFlow) Run(
 	// +optional
 	// +default=false
 	pass bool,
-) (*dagger.Directory, error) {
+) *Results {
 	var wg sync.WaitGroup
 	wg.Add(5)
 
@@ -226,20 +245,6 @@ func (m *PitcFlow) Run(
 	// This Blocks the execution until its counter become 0
 	wg.Wait()
 
-	// Get the names of the files to fail on errors of the functions
-	lintOutputName, err := lintOutput.Name(ctx)
-	if err != nil {
-		return nil, err
-	}
-	securityScanName, err := securityScan.Name(ctx)
-	if err != nil {
-		return nil, err
-	}
-	vulnerabilityScanName, err := vulnerabilityScan.Name(ctx)
-	if err != nil {
-		return nil, err
-	}
-
 	// After linting, scanning and testing is done, we can create the sbom and publish the image
 	wg.Add(2)
 
@@ -256,43 +261,41 @@ func (m *PitcFlow) Run(
 	// This Blocks the execution until its counter become 0
 	wg.Wait()
 
-	if err != nil {
-		return nil, err
-    } else {
-        // After publishing the image, we can sign and attest
-        wg.Add(3)
+	if err == nil {
+		// After publishing the image, we can sign and attest
+		wg.Add(3)
 
-    	_, dtErr := func() (string, error) {
-    		defer wg.Done()
-    		return m.PublishToDeptrack(ctx, sbom, dtAddress, dtApiKey, dtProjectUUID)
-    	}()
+		_, dtErr := func() (string, error) {
+			defer wg.Done()
+			return m.PublishToDeptrack(ctx, sbom, dtAddress, dtApiKey, dtProjectUUID)
+		}()
 
-    	_, signErr := func() (string, error) {
-    		defer wg.Done()
-    		return m.Sign(ctx, registryUsername, registryPassword, digest)
-    	}()
+		_, signErr := func() (string, error) {
+			defer wg.Done()
+			return m.Sign(ctx, registryUsername, registryPassword, digest)
+		}()
 
-    	_, attErr := func() (string, error) {
-    		defer wg.Done()
-    		return m.Attest(ctx, registryUsername, registryPassword, digest, sbom, "cyclonedx")
-    	}()
+		_, attErr := func() (string, error) {
+			defer wg.Done()
+			return m.Attest(ctx, registryUsername, registryPassword, digest, sbom, "cyclonedx")
+		}()
 
-        // This Blocks the execution until its counter become 0
-        wg.Wait()
+		// This Blocks the execution until its counter become 0
+		wg.Wait()
 
-        if dtErr != nil || signErr != nil || attErr != nil {
-            return nil, fmt.Errorf("one or more errors occurred: dtErr=%w, signErr=%w, attErr=%w", dtErr, signErr, attErr)
-        }
-    }
+		if dtErr != nil || signErr != nil || attErr != nil {
+			err = fmt.Errorf("one or more errors occurred: dtErr=%w, signErr=%w, attErr=%w", dtErr, signErr, attErr)
+		}
+	}
 
-	sbomName, _ := sbom.Name(ctx)
-	result_container := dag.Container().
-		WithWorkdir("/tmp/out").
-		WithFile(fmt.Sprintf("/tmp/out/lint/%s", lintOutputName), lintOutput).
-		WithFile(fmt.Sprintf("/tmp/out/scan/%s", securityScanName), securityScan).
-		WithDirectory("/tmp/out/unit-tests/", testReports).
-		WithFile(fmt.Sprintf("/tmp/out/vuln/%s", vulnerabilityScanName), vulnerabilityScan).
-		WithFile(fmt.Sprintf("/tmp/out/sbom/%s", sbomName), sbom)
-	return result_container.
-		Directory("."), err
+	return &Results{
+		TestReports:       testReports,
+		LintOutput:        lintOutput,
+		SecurityScan:      securityScan,
+		VulnerabilityScan: vulnerabilityScan,
+		Sbom:              sbom,
+		Image:             image,
+		Error:             err.Error(),
+		Success:           err == nil,
+	}
 }

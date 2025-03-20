@@ -1,7 +1,7 @@
 package main
 
 import (
-    "context"
+	"context"
 	"dagger/tests/internal/dagger"
 	"fmt"
 	"time"
@@ -74,7 +74,7 @@ func (m *Tests) PublishWithCredentials(ctx context.Context) error {
 	return nil
 }
 
-func (m *Tests) Run(_ context.Context) error {
+func (m *Tests) Run(ctx context.Context) error {
 	lintContainer := m.uniqContainer("alpine:latest", fmt.Sprintf("%d", time.Now().UnixNano())).
 		WithExec([]string{"sh", "-c", "echo 'lint' > /tmp/lint.txt"})
 	sastContainer := m.uniqContainer("alpine:latest", fmt.Sprintf("%d", time.Now().UnixNano())).
@@ -92,7 +92,7 @@ func (m *Tests) Run(_ context.Context) error {
 	dtAddress := "ttl.sh"
 	dtProjectUUID := "12345678-1234-1234-1234-123456789012"
 
-	directory := dag.PitcFlow().Run(
+	results := dag.PitcFlow().Run(
 		dir,
 		lintContainer,
 		lintReport,
@@ -108,13 +108,19 @@ func (m *Tests) Run(_ context.Context) error {
 		secret,
 	)
 
-	if directory == nil {
-		return fmt.Errorf("should run the pipeline and return a directory")
+	if results == nil {
+		return fmt.Errorf("should run the pipeline and return a results struct")
 	}
 
-	_, err := directory.Entries(context.Background())
+	testReportsDir := results.TestReports()
+	_, err := testReportsDir.Entries(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to list files in directory: %w", err)
+		return fmt.Errorf("should have returned some test reports")
+	}
+
+	success, err := results.Success(ctx)
+	if !success || err != nil {
+		return fmt.Errorf("should have run successfuly")
 	}
 
 	return nil
