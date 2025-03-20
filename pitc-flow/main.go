@@ -256,34 +256,37 @@ func (m *PitcFlow) Run(
 	// This Blocks the execution until its counter become 0
 	wg.Wait()
 
+	if err == nil {
+		// After publishing the image, we can sign and attest
+		wg.Add(3)
+
+		_, dtErr := func() (string, error) {
+			defer wg.Done()
+			return m.PublishToDeptrack(ctx, sbom, dtAddress, dtApiKey, dtProjectUUID)
+		}()
+
+		_, signErr := func() (string, error) {
+			defer wg.Done()
+			return m.Sign(ctx, registryUsername, registryPassword, digest)
+		}()
+
+		_, attErr := func() (string, error) {
+			defer wg.Done()
+			return m.Attest(ctx, registryUsername, registryPassword, digest, sbom, "cyclonedx")
+		}()
+
+		// This Blocks the execution until its counter become 0
+		wg.Wait()
+
+		if dtErr != nil || signErr != nil || attErr != nil {
+			err = fmt.Errorf("one or more errors occurred: dtErr=%w, signErr=%w, attErr=%w", dtErr, signErr, attErr)
+		}
+	}
+
+	errorString := ""
 	if err != nil {
-		return nil, err
-    } else {
-        // After publishing the image, we can sign and attest
-        wg.Add(3)
-
-    	_, dtErr := func() (string, error) {
-    		defer wg.Done()
-    		return m.PublishToDeptrack(ctx, sbom, dtAddress, dtApiKey, dtProjectUUID)
-    	}()
-
-    	_, signErr := func() (string, error) {
-    		defer wg.Done()
-    		return m.Sign(ctx, registryUsername, registryPassword, digest)
-    	}()
-
-    	_, attErr := func() (string, error) {
-    		defer wg.Done()
-    		return m.Attest(ctx, registryUsername, registryPassword, digest, sbom, "cyclonedx")
-    	}()
-
-        // This Blocks the execution until its counter become 0
-        wg.Wait()
-
-        if dtErr != nil || signErr != nil || attErr != nil {
-            return nil, fmt.Errorf("one or more errors occurred: dtErr=%w, signErr=%w, attErr=%w", dtErr, signErr, attErr)
-        }
-    }
+		errorString = err.Error()
+	}
 
 	sbomName, _ := sbom.Name(ctx)
 	result_container := dag.Container().
@@ -292,7 +295,8 @@ func (m *PitcFlow) Run(
 		WithFile(fmt.Sprintf("/tmp/out/scan/%s", securityScanName), securityScan).
 		WithDirectory("/tmp/out/unit-tests/", testReports).
 		WithFile(fmt.Sprintf("/tmp/out/vuln/%s", vulnerabilityScanName), vulnerabilityScan).
-		WithFile(fmt.Sprintf("/tmp/out/sbom/%s", sbomName), sbom)
+		WithFile(fmt.Sprintf("/tmp/out/sbom/%s", sbomName), sbom).
+		WithNewFile("/tmp/out/status.txt", errorString)
 	return result_container.
 		Directory("."), err
 }

@@ -3,7 +3,8 @@ package main
 import (
     "context"
 	"dagger/tests/internal/dagger"
-	"fmt"
+    "fmt"
+    "strings"
 	"time"
 
 	"github.com/sourcegraph/conc/pool"
@@ -112,12 +113,18 @@ func (m *Tests) Run(_ context.Context) error {
 		return fmt.Errorf("should run the pipeline and return a directory")
 	}
 
-	_, err := directory.Entries(context.Background())
+	files, err := directory.Entries(context.Background())
 	if err != nil {
 		return fmt.Errorf("failed to list files in directory: %w", err)
 	}
 
-	return nil
+	for _, file := range files {
+		if strings.Contains(file, "status.txt") {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("status.txt was missing from all files: %v", files)
 }
 
 func (m *Tests) uniqContainer(image string, randomString string) *dagger.Container {
